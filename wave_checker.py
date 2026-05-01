@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 from datetime import datetime, timezone, timedelta
@@ -103,10 +104,24 @@ def send_telegram(token: str, chat_id: str, text: str) -> None:
     print("Telegram message sent.")
 
 
+def load_config_file() -> dict:
+    """Read config.json if present (set by bot_handler.py via Telegram commands)."""
+    try:
+        with open("config.json") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
 def main() -> None:
     token = os.environ.get("TELEGRAM_TOKEN", "")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
-    min_height = float(os.environ.get("MIN_WAVE_HEIGHT", "0.8"))
+
+    # config.json (updated by Telegram /setthreshold) takes priority over env var.
+    file_config = load_config_file()
+    env_min = float(os.environ.get("MIN_WAVE_HEIGHT", "0.8"))
+    min_height = float(file_config.get("min_wave_height", env_min))
+
     check_days_raw = os.environ.get("CHECK_DAYS", "friday,saturday")
     check_days = [d.strip().lower() for d in check_days_raw.split(",")]
 
