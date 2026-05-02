@@ -1,12 +1,12 @@
-name: Wave Alert
+name: Weekly Forecast
 
 on:
   schedule:
-    - cron: "0 6 * * *"   # 06:00 UTC = 08:00 Israel (UTC+2) / 09:00 DST (UTC+3)
+    - cron: "0 5 * * 0"   # 05:00 UTC = 07:00 Israel (UTC+2) / 08:00 DST, every Sunday
   workflow_dispatch:        # allow manual runs for testing
 
 jobs:
-  check-waves:
+  weekly-forecast:
     runs-on: ubuntu-latest
 
     steps:
@@ -21,11 +21,9 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-      - name: Run wave checker
+      - name: Send weekly forecast
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           MIN_WAVE_HEIGHT: ${{ vars.MIN_WAVE_HEIGHT }}
-          MIN_SCORE: ${{ vars.MIN_SCORE }}
-          CHECK_DAYS: ${{ vars.CHECK_DAYS }}
-        run: python wave_checker.py --mode today
+        run: python wave_checker.py --mode forecast

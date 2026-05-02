@@ -3,7 +3,9 @@ Polls Telegram for bot commands and updates config.json in the repo.
 
 Supported commands (from the authorized chat only):
   /setthreshold 1.2  — set minimum wave height alert threshold
-  /status            — show current threshold
+  /setscore 5.0      — set minimum composite surf score (1–10)
+  /forecast          — send the 5-day surf forecast now
+  /status            — show current settings
   /help              — show available commands
 """
 
@@ -13,6 +15,8 @@ import os
 import sys
 
 import requests
+
+from wave_checker import run_forecast, load_config_file as load_wave_config
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
@@ -31,7 +35,7 @@ def load_config() -> dict:
         with open(CONFIG_FILE) as f:
             return json.load(f)
     except Exception:
-        return {"min_wave_height": 0.8, "last_update_id": 0}
+        return {"min_wave_height": 0.8, "min_score": 4.0, "last_update_id": 0}
 
 
 def push_config(config: dict) -> None:
@@ -51,7 +55,7 @@ def push_config(config: dict) -> None:
     ).decode()
 
     payload: dict = {
-        "message": f"bot: set min_wave_height={config['min_wave_height']}",
+        "message": f"bot: update config (threshold={config['min_wave_height']}, score={config.get('min_score', 4.0)})",
         "content": content_b64,
     }
     if sha:
@@ -104,11 +108,33 @@ def handle_setthreshold(parts: list[str], config: dict) -> tuple[str, bool]:
     return reply, True
 
 
+def handle_setscore(parts: list[str], config: dict) -> tuple[str, bool]:
+    if len(parts) != 2:
+        return "❌ פורמט שגוי.\nדוגמה: /setscore 5.0", False
+    try:
+        value = float(parts[1])
+    except ValueError:
+        return "❌ הכנס מספר תקין.\nדוגמה: /setscore 5.0", False
+
+    if not (1.0 <= value <= 10.0):
+        return "❌ ציון חייב להיות בין 1.0 ל-10.0.", False
+
+    config["min_score"] = round(value, 1)
+    reply = (
+        f"✅ סף ציון עודכן!\n"
+        f"⭐ ציון מינימום חדש: {value:.1f}/10\n"
+        f"ההגדרה תיכנס לתוקף בבדיקה הבאה 🏄"
+    )
+    return reply, True
+
+
 def handle_status(config: dict) -> str:
+    min_score = config.get("min_score", 4.0)
     return (
         f"📊 הגדרות נוכחיות:\n"
-        f"⚡ סף מינימום: {config['min_wave_height']:.1f}m\n"
-        f"לשינוי: /setthreshold [גובה]"
+        f"⚡ סף גלים: {config['min_wave_height']:.1f}m\n"
+        f"⭐ ציון מינימום: {min_score:.1f}/10\n"
+        f"לשינוי: /setthreshold [גובה] | /setscore [ציון]"
     )
 
 
@@ -116,6 +142,9 @@ HELP_TEXT = (
     "🏄 Wave Alert Bot — פקודות זמינות:\n\n"
     "/setthreshold [מטר] — שנה סף גלים מינימלי\n"
     "  דוגמה: /setthreshold 1.2\n\n"
+    "/setscore [1-10] — שנה ציון מינימום לקבלת התראה\n"
+    "  דוגמה: /setscore 5.0\n\n"
+    "/forecast — קבל תחזית 5 ימים עכשיו\n\n"
     "/status — הצג הגדרות נוכחיות\n\n"
     "/help — הצג הודעה זו"
 )
@@ -175,6 +204,22 @@ def main() -> None:
             if changed:
                 config_changed = True
             send_message(reply)
+
+        elif command == "/setscore":
+            reply, changed = handle_setscore(parts, config)
+            if changed:
+                config_changed = True
+            send_message(reply)
+
+        elif command == "/forecast":
+            send_message("⏳ מביא תחזית 5 ימים...")
+            try:
+                wave_config = load_wave_config()
+                env_min = float(os.environ.get("MIN_WAVE_HEIGHT", "0.8"))
+                min_height = float(wave_config.get("min_wave_height", env_min))
+                run_forecast(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, min_height)
+            except Exception as e:
+                send_message(f"❌ שגיאה בטעינת תחזית: {e}")
 
         elif command == "/status":
             send_message(handle_status(config))
