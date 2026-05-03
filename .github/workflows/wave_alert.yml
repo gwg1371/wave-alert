@@ -38,6 +38,6 @@ jobs:
         run: |
           git config user.name "Wave Alert Bot"
           git config user.email "wave-alert-bot@users.noreply.github.com"
-          git add history.json
+          git add history.json || true
           git diff --cached --quiet || git commit -m "bot: update history log [skip ci]"
-          git push
+          git diff origin/main..HEAD --quiet || git push
