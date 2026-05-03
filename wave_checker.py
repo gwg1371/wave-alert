@@ -39,86 +39,172 @@ FORECAST_DAYS = 5
 HISTORY_FILE = "history.json"
 MAX_HISTORY = 90
 
+ISRAEL_TZ = timezone(timedelta(hours=3))
+
 
 def get_israel_now() -> datetime:
-    israel_tz = timezone(timedelta(hours=3))
-    return datetime.now(israel_tz)
+    return datetime.now(ISRAEL_TZ)
 
 
 def today_name(now: datetime) -> str:
     return now.strftime("%A").lower()
 
 
-def fetch_marine_data(lat: float, lon: float, start_date: str, end_date: str) -> dict | None:
-    url = "https://marine-api.open-meteo.com/v1/marine"
+# ---------------------------------------------------------------------------
+# Data fetching — unified hourly format
+# ---------------------------------------------------------------------------
+# Every fetch function returns list[dict] where each dict is:
+#   {date: "YYYY-MM-DD", hour: int, wave_height: float|None,
+#    wave_period: float|None, wind_speed_kmh: float|None,
+#    wind_dir: float|None, tide_height: float|None}
+
+def _pick(sources: dict) -> float | None:
+    """Pick best available value from a Stormglass multi-source dict."""
+    for src in ("sg", "noaa", "icon", "meto", "dwd", "fcoo", "fmi", "yr", "smhi"):
+        val = sources.get(src)
+        if val is not None:
+            return float(val)
+    for val in sources.values():
+        if val is not None:
+            return float(val)
+    return None
+
+
+def fetch_stormglass(
+    lat: float, lon: float, start_date: str, end_date: str, key: str
+) -> list[dict] | None:
+    """
+    Single Stormglass call covering wave height+period, wind, and tide.
+    Returns unified hourly list in Israel local time, or None on failure.
+    """
+    start_dt = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=ISRAEL_TZ)
+    end_dt = datetime.strptime(end_date, "%Y-%m-%d").replace(hour=23, minute=59, tzinfo=ISRAEL_TZ)
+
     params = {
-        "latitude": lat,
-        "longitude": lon,
-        "hourly": "wave_height,wave_period",
-        "start_date": start_date,
-        "end_date": end_date,
-        "timezone": "Asia/Jerusalem",
+        "lat": lat,
+        "lng": lon,
+        "params": "waveHeight,wavePeriod,windSpeed,windDirection,seaLevel",
+        "start": start_dt.isoformat(),
+        "end": end_dt.isoformat(),
     }
     try:
-        resp = requests.get(url, params=params, timeout=15)
+        resp = requests.get(
+            "https://api.stormglass.io/v2/weather/point",
+            params=params,
+            headers={"Authorization": key},
+            timeout=20,
+        )
         resp.raise_for_status()
-        return resp.json()
+        data = resp.json()
     except requests.RequestException as e:
-        print(f"Marine API error for ({lat}, {lon}): {e}", file=sys.stderr)
+        print(f"Stormglass error for ({lat}, {lon}): {e}", file=sys.stderr)
         return None
 
+    result = []
+    for entry in data.get("hours", []):
+        try:
+            local_dt = datetime.fromisoformat(
+                entry["time"].replace("Z", "+00:00")
+            ).astimezone(ISRAEL_TZ)
+        except (KeyError, ValueError):
+            continue
 
-def fetch_wind_data(lat: float, lon: float, start_date: str, end_date: str) -> dict | None:
-    url = "https://api.open-meteo.com/v1/forecast"
-    params = {
-        "latitude": lat,
-        "longitude": lon,
+        wind_ms = _pick(entry.get("windSpeed", {}))
+        result.append({
+            "date": local_dt.strftime("%Y-%m-%d"),
+            "hour": local_dt.hour,
+            "wave_height": _pick(entry.get("waveHeight", {})),
+            "wave_period": _pick(entry.get("wavePeriod", {})),
+            "wind_speed_kmh": round(wind_ms * 3.6, 1) if wind_ms is not None else None,
+            "wind_dir": _pick(entry.get("windDirection", {})),
+            "tide_height": _pick(entry.get("seaLevel", {})),
+        })
+
+    return result or None
+
+
+def fetch_open_meteo(
+    lat: float, lon: float, start_date: str, end_date: str
+) -> list[dict] | None:
+    """
+    Fallback when no Stormglass key. Calls Open-Meteo marine + forecast APIs.
+    Returns unified hourly list (tide_height is always None).
+    """
+    marine_params = {
+        "latitude": lat, "longitude": lon,
+        "hourly": "wave_height,wave_period",
+        "start_date": start_date, "end_date": end_date,
+        "timezone": "Asia/Jerusalem",
+    }
+    wind_params = {
+        "latitude": lat, "longitude": lon,
         "hourly": "wind_speed_10m,wind_direction_10m",
-        "start_date": start_date,
-        "end_date": end_date,
+        "start_date": start_date, "end_date": end_date,
         "timezone": "Asia/Jerusalem",
         "wind_speed_unit": "kmh",
     }
     try:
-        resp = requests.get(url, params=params, timeout=15)
-        resp.raise_for_status()
-        return resp.json()
+        marine_resp = requests.get(
+            "https://marine-api.open-meteo.com/v1/marine",
+            params=marine_params, timeout=15,
+        )
+        marine_resp.raise_for_status()
+        marine = marine_resp.json()
+    except requests.RequestException as e:
+        print(f"Marine API error for ({lat}, {lon}): {e}", file=sys.stderr)
+        return None
+
+    wind_by_time: dict[str, tuple[float, float]] = {}
+    try:
+        wind_resp = requests.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params=wind_params, timeout=15,
+        )
+        wind_resp.raise_for_status()
+        wind = wind_resp.json()
+        for t, spd, drn in zip(
+            wind["hourly"]["time"],
+            wind["hourly"]["wind_speed_10m"],
+            wind["hourly"]["wind_direction_10m"],
+        ):
+            if spd is not None and drn is not None:
+                wind_by_time[t] = (spd, drn)
     except requests.RequestException as e:
         print(f"Wind API error for ({lat}, {lon}): {e}", file=sys.stderr)
-        return None
 
-
-def fetch_tide_data(lat: float, lon: float, date_str: str, key: str) -> dict[int, float] | None:
-    """Return {hour: tide_height_m} for the given date, or None on failure."""
-    israel_tz = timezone(timedelta(hours=3))
-    start_unix = int(
-        datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=israel_tz).timestamp()
-    )
-    url = "https://www.worldtides.info/api/v3"
-    params = {
-        "heights": 1,
-        "step": 3600,
-        "lat": lat,
-        "lon": lon,
-        "start": start_unix,
-        "length": 86400,
-        "key": key,
-    }
     try:
-        resp = requests.get(url, params=params, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
-        if data.get("status") != 200:
-            print(f"WorldTides error: {data.get('error')}", file=sys.stderr)
-            return None
-        result: dict[int, float] = {}
-        for entry in data.get("heights", []):
-            hour = datetime.fromtimestamp(entry["dt"], tz=israel_tz).hour
-            result[hour] = entry["height"]
-        return result
-    except requests.RequestException as e:
-        print(f"Tide API error for ({lat}, {lon}): {e}", file=sys.stderr)
+        times = marine["hourly"]["time"]
+        heights = marine["hourly"]["wave_height"]
+        periods = marine["hourly"].get("wave_period", [None] * len(times))
+    except KeyError:
         return None
+
+    result = []
+    for t, h, p in zip(times, heights, periods):
+        w = wind_by_time.get(t)
+        result.append({
+            "date": t[:10],
+            "hour": int(t[11:13]),
+            "wave_height": h,
+            "wave_period": p,
+            "wind_speed_kmh": w[0] if w else None,
+            "wind_dir": w[1] if w else None,
+            "tide_height": None,
+        })
+
+    return result or None
+
+
+def _fetch_spot_data(
+    spot: dict, start_date: str, end_date: str, stormglass_key: str
+) -> list[dict] | None:
+    """Try Stormglass first; fall back to Open-Meteo if no key or failure."""
+    if stormglass_key:
+        data = fetch_stormglass(spot["lat"], spot["lon"], start_date, end_date, stormglass_key)
+        if data is not None:
+            return data
+        print(f"Stormglass failed for {spot['name']}, falling back to Open-Meteo.", file=sys.stderr)
+    return fetch_open_meteo(spot["lat"], spot["lon"], start_date, end_date)
 
 
 # ---------------------------------------------------------------------------
@@ -134,7 +220,6 @@ def _angle_diff(a: float, b: float) -> float:
 def height_score(height: float, min_height: float) -> float:
     if height < min_height:
         return 0.0
-    # 0.3 at threshold, 1.0 at 2× threshold
     ratio = (height - min_height) / max(min_height, 0.01)
     return min(1.0, 0.3 + ratio * 0.7)
 
@@ -151,17 +236,17 @@ def period_score(period: float | None) -> float:
     return 1.0
 
 
-def wind_score(wind_speed: float | None, wind_dir: float | None, offshore_dir: float) -> float:
-    if wind_speed is None or wind_dir is None:
+def wind_score(wind_speed_kmh: float | None, wind_dir: float | None, offshore_dir: float) -> float:
+    if wind_speed_kmh is None or wind_dir is None:
         return 0.5
-    if wind_speed < 10:
+    if wind_speed_kmh < 10:
         return 0.9  # glassy — good regardless of direction
     diff = _angle_diff(wind_dir, offshore_dir)
     if diff <= 30:
         return 1.0
     if diff <= 90:
         return 1.0 - (diff - 30) / 60 * 0.7   # 1.0 → 0.3
-    return max(0.0, 0.3 - (diff - 90) / 90 * 0.3)  # 0.3 → 0.0
+    return max(0.0, 0.3 - (diff - 90) / 90 * 0.3)
 
 
 def tide_phase(tide_heights: dict[int, float], hour: int) -> str | None:
@@ -184,7 +269,7 @@ def tide_phase(tide_heights: dict[int, float], hour: int) -> str | None:
 
 def tide_score(tide_heights: dict[int, float] | None, hour: int, best_tide: str | None) -> float:
     if not tide_heights or best_tide is None:
-        return 0.5  # neutral — Mediterranean tides are small
+        return 0.5
     phase = tide_phase(tide_heights, hour)
     if phase is None:
         return 0.5
@@ -203,6 +288,19 @@ def tide_label(tide_heights: dict[int, float] | None, hour: int) -> str | None:
     return {"high": "גאות ▲", "low": "שפל ▼", "rising": "עולה ↑", "falling": "יורד ↓"}.get(phase)
 
 
+def wind_label(wind_speed_kmh: float | None, wind_dir: float | None, offshore_dir: float) -> str:
+    if wind_speed_kmh is None or wind_dir is None:
+        return "?"
+    if wind_speed_kmh < 10:
+        return "גלאסי 🪟"
+    diff = _angle_diff(wind_dir, offshore_dir)
+    if diff <= 45:
+        return "אוף 🟢"
+    if diff <= 90:
+        return "קרוס 🟡"
+    return "און 🔴"
+
+
 def composite_score(
     h_score: float, p_score: float, w_score: float, t_score: float | None = None
 ) -> float:
@@ -213,84 +311,52 @@ def composite_score(
     return round(raw * 10, 1)
 
 
-def wind_label(wind_speed: float | None, wind_dir: float | None, offshore_dir: float) -> str:
-    if wind_speed is None or wind_dir is None:
-        return "?"
-    if wind_speed < 10:
-        return "גלאסי 🪟"
-    diff = _angle_diff(wind_dir, offshore_dir)
-    if diff <= 45:
-        return "אוף 🟢"
-    if diff <= 90:
-        return "קרוס 🟡"
-    return "און 🔴"
-
-
 # ---------------------------------------------------------------------------
 # Conditions extraction
 # ---------------------------------------------------------------------------
 
 def best_conditions_in_window(
-    marine: dict,
-    wind: dict | None,
-    spot: dict,
-    min_height: float,
-    date_str: str,
-    tides: dict[int, float] | None = None,
+    hours: list[dict], spot: dict, min_height: float, date_str: str
 ) -> dict | None:
     """Return the highest-scoring hour in the surf window for the given date."""
-    try:
-        times = marine["hourly"]["time"]
-        heights = marine["hourly"]["wave_height"]
-        periods = marine["hourly"].get("wave_period", [None] * len(times))
-    except KeyError:
+    surf_hours = [
+        h for h in hours
+        if h["date"] == date_str
+        and SURF_START_HOUR <= h["hour"] < SURF_END_HOUR
+        and h["wave_height"] is not None
+    ]
+    if not surf_hours:
         return None
 
-    wind_speeds: dict[str, float] = {}
-    wind_dirs: dict[str, float] = {}
-    if wind:
-        try:
-            for t, spd, drn in zip(
-                wind["hourly"]["time"],
-                wind["hourly"]["wind_speed_10m"],
-                wind["hourly"]["wind_direction_10m"],
-            ):
-                wind_speeds[t] = spd
-                wind_dirs[t] = drn
-        except KeyError:
-            pass
+    # Build tide heights across the full day (not just surf window) for phase detection
+    tide_heights: dict[int, float] = {
+        h["hour"]: h["tide_height"]
+        for h in hours
+        if h["date"] == date_str and h["tide_height"] is not None
+    }
+    has_tide = bool(tide_heights)
 
     best: dict | None = None
     best_score = -1.0
 
-    for t, h, p in zip(times, heights, periods):
-        if not t.startswith(date_str):
-            continue
-        if h is None:
-            continue
-        hour = int(t[11:13])
-        if not (SURF_START_HOUR <= hour < SURF_END_HOUR):
-            continue
-
-        ws = wind_speeds.get(t)
-        wd = wind_dirs.get(t)
-        hs = height_score(h, min_height)
-        ps = period_score(p)
-        wsc = wind_score(ws, wd, spot["offshore_dir"])
-        ts = tide_score(tides, hour, spot.get("best_tide")) if tides is not None else None
+    for h in surf_hours:
+        hs = height_score(h["wave_height"], min_height)
+        ps = period_score(h["wave_period"])
+        wsc = wind_score(h["wind_speed_kmh"], h["wind_dir"], spot["offshore_dir"])
+        ts = tide_score(tide_heights, h["hour"], spot.get("best_tide")) if has_tide else None
         cs = composite_score(hs, ps, wsc, ts)
 
         if cs > best_score:
             best_score = cs
             best = {
                 "name": spot["name"],
-                "hour": hour,
-                "height": h,
-                "period": p,
-                "wind_speed": ws,
-                "wind_dir": wd,
-                "wind_label": wind_label(ws, wd, spot["offshore_dir"]),
-                "tide_label": tide_label(tides, hour) if tides is not None else None,
+                "hour": h["hour"],
+                "height": h["wave_height"],
+                "period": h["wave_period"],
+                "wind_speed": h["wind_speed_kmh"],
+                "wind_dir": h["wind_dir"],
+                "wind_label": wind_label(h["wind_speed_kmh"], h["wind_dir"], spot["offshore_dir"]),
+                "tide_label": tide_label(tide_heights, h["hour"]) if has_tide else None,
                 "score": cs,
                 "height_score": hs,
             }
@@ -310,7 +376,7 @@ def build_today_message(
         good = r["height_score"] > 0 and r["score"] >= min_score
         icon = "📍" if good else "❌"
         period_str = f"{r['period']:.0f}s" if r["period"] is not None else "—"
-        tide_str = f" | 🌊 {r['tide_label']}" if r.get("tide_label") else ""
+        tide_str = f" | {r['tide_label']}" if r.get("tide_label") else ""
         lines.append(
             f"{icon} {r['name']}\n"
             f"   🌊 {r['height']:.1f}m | ⏱ {period_str} | 💨 {r['wind_label']}{tide_str}\n"
@@ -395,7 +461,7 @@ def run_today(
     min_height: float,
     min_score: float,
     check_days: list[str],
-    worldtides_key: str = "",
+    stormglass_key: str = "",
 ) -> None:
     now = get_israel_now()
     today = today_name(now)
@@ -409,13 +475,11 @@ def run_today(
 
     results = []
     for spot in SPOTS:
-        marine = fetch_marine_data(spot["lat"], spot["lon"], date_str, date_str)
-        wind = fetch_wind_data(spot["lat"], spot["lon"], date_str, date_str)
-        tides = fetch_tide_data(spot["lat"], spot["lon"], date_str, worldtides_key) if worldtides_key else None
-        if marine is None:
-            print(f"Skipping {spot['name']} — marine fetch failed.", file=sys.stderr)
+        hours = _fetch_spot_data(spot, date_str, date_str, stormglass_key)
+        if hours is None:
+            print(f"Skipping {spot['name']} — all fetches failed.", file=sys.stderr)
             continue
-        best = best_conditions_in_window(marine, wind, spot, min_height, date_str, tides)
+        best = best_conditions_in_window(hours, spot, min_height, date_str)
         if best is None:
             print(f"No data in surf window for {spot['name']}.", file=sys.stderr)
             continue
@@ -432,7 +496,6 @@ def run_today(
 
     any_good = any(r["score"] >= min_score and r["height_score"] > 0 for r in results)
 
-    # Always log the day's conditions regardless of whether an alert was sent
     append_history({
         "date": date_str,
         "day_he": day_he,
@@ -465,24 +528,21 @@ def run_today(
     send_telegram(token, chat_id, message)
 
 
-def run_forecast(token: str, chat_id: str, min_height: float, worldtides_key: str = "") -> None:
+def run_forecast(
+    token: str, chat_id: str, min_height: float, stormglass_key: str = ""
+) -> None:
     now = get_israel_now()
     start_date = now.strftime("%Y-%m-%d")
     end_date = (now + timedelta(days=FORECAST_DAYS - 1)).strftime("%Y-%m-%d")
-
     dates = [
         (now + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(FORECAST_DAYS)
     ]
 
-    all_marine: dict[str, dict | None] = {}
-    all_wind: dict[str, dict | None] = {}
-    for spot in SPOTS:
-        all_marine[spot["name"]] = fetch_marine_data(
-            spot["lat"], spot["lon"], start_date, end_date
-        )
-        all_wind[spot["name"]] = fetch_wind_data(
-            spot["lat"], spot["lon"], start_date, end_date
-        )
+    # One call per spot covers all 5 days
+    all_hours: dict[str, list[dict] | None] = {
+        spot["name"]: _fetch_spot_data(spot, start_date, end_date, stormglass_key)
+        for spot in SPOTS
+    }
 
     forecast_days = []
     for date_str in dates:
@@ -491,13 +551,10 @@ def run_forecast(token: str, chat_id: str, min_height: float, worldtides_key: st
 
         best_for_day: dict | None = None
         for spot in SPOTS:
-            marine = all_marine.get(spot["name"])
-            wind = all_wind.get(spot["name"])
-            if marine is None:
+            hours = all_hours.get(spot["name"])
+            if hours is None:
                 continue
-            # Fetch per-day tide data for forecast (one call per spot per day)
-            tides = fetch_tide_data(spot["lat"], spot["lon"], date_str, worldtides_key) if worldtides_key else None
-            cond = best_conditions_in_window(marine, wind, spot, min_height, date_str, tides)
+            cond = best_conditions_in_window(hours, spot, min_height, date_str)
             if cond is None:
                 continue
             if best_for_day is None or cond["score"] > best_for_day["score"]:
@@ -505,14 +562,8 @@ def run_forecast(token: str, chat_id: str, min_height: float, worldtides_key: st
 
         if best_for_day is None:
             forecast_days.append(
-                {
-                    "date": date_str,
-                    "day_he": day_he,
-                    "score": 0.0,
-                    "height": 0.0,
-                    "period": None,
-                    "wind_label": "—",
-                }
+                {"date": date_str, "day_he": day_he, "score": 0.0,
+                 "height": 0.0, "period": None, "wind_label": "—"}
             )
         else:
             forecast_days.append(
@@ -546,7 +597,7 @@ def main() -> None:
 
     token = os.environ.get("TELEGRAM_TOKEN", "")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
-    worldtides_key = os.environ.get("WORLDTIDES_KEY", "")
+    stormglass_key = os.environ.get("STORMGLASS_KEY", "")
 
     file_config = load_config_file()
     env_min = float(os.environ.get("MIN_WAVE_HEIGHT", "0.8"))
@@ -554,11 +605,11 @@ def main() -> None:
     min_score = float(file_config.get("min_score", os.environ.get("MIN_SCORE", "4.0")))
 
     if args.mode == "forecast":
-        run_forecast(token, chat_id, min_height, worldtides_key)
+        run_forecast(token, chat_id, min_height, stormglass_key)
     else:
         check_days_raw = os.environ.get("CHECK_DAYS", "friday,saturday")
         check_days = [d.strip().lower() for d in check_days_raw.split(",")]
-        run_today(token, chat_id, min_height, min_score, check_days, worldtides_key)
+        run_today(token, chat_id, min_height, min_score, check_days, stormglass_key)
 
 
 if __name__ == "__main__":

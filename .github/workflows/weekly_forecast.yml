@@ -26,5 +26,5 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           MIN_WAVE_HEIGHT: ${{ vars.MIN_WAVE_HEIGHT }}
-          WORLDTIDES_KEY: ${{ secrets.WORLDTIDES_KEY }}
+          STORMGLASS_KEY: ${{ secrets.STORMGLASS_KEY }}
         run: python wave_checker.py --mode forecast

@@ -31,7 +31,7 @@ jobs:
           MIN_WAVE_HEIGHT: ${{ vars.MIN_WAVE_HEIGHT }}
           MIN_SCORE: ${{ vars.MIN_SCORE }}
           CHECK_DAYS: ${{ vars.CHECK_DAYS }}
-          WORLDTIDES_KEY: ${{ secrets.WORLDTIDES_KEY }}
+          STORMGLASS_KEY: ${{ secrets.STORMGLASS_KEY }}
         run: python wave_checker.py --mode today
 
       - name: Commit history log
