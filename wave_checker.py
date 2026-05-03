@@ -102,6 +102,10 @@ def fetch_stormglass(
             )
             return None
         data = resp.json()
+        meta = data.get("meta", {})
+        used = meta.get("requestCount", "?")
+        quota = meta.get("dailyQuota", "?")
+        print(f"Stormglass OK for ({lat}, {lon}): {used}/{quota} requests used today", file=sys.stderr)
     except requests.RequestException as e:
         print(f"Stormglass error for ({lat}, {lon}): {e}", file=sys.stderr)
         return None
@@ -123,10 +127,16 @@ def fetch_stormglass(
             "wave_period": _pick(entry.get("wavePeriod", {})),
             "wind_speed_kmh": round(wind_ms * 3.6, 1) if wind_ms is not None else None,
             "wind_dir": _pick(entry.get("windDirection", {})),
-            "tide_height": _pick(entry.get("seaLevel", {})),
+            "tide_height": None,
         })
 
-    return result or None
+    if not result:
+        print(
+            f"Stormglass returned 0 hours for ({lat}, {lon}). meta={data.get('meta', {})}",
+            file=sys.stderr,
+        )
+        return None
+    return result
 
 
 def fetch_open_meteo(
