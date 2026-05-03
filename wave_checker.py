@@ -83,7 +83,7 @@ def fetch_stormglass(
     params = {
         "lat": lat,
         "lng": lon,
-        "params": "waveHeight,wavePeriod,windSpeed,windDirection,seaLevel",
+        "params": "waveHeight,wavePeriod,windSpeed,windDirection",
         "start": start_dt.isoformat(),
         "end": end_dt.isoformat(),
     }
@@ -94,7 +94,13 @@ def fetch_stormglass(
             headers={"Authorization": key},
             timeout=20,
         )
-        resp.raise_for_status()
+        if not resp.ok:
+            body = resp.text[:300]
+            print(
+                f"Stormglass HTTP {resp.status_code} for ({lat}, {lon}): {body}",
+                file=sys.stderr,
+            )
+            return None
         data = resp.json()
     except requests.RequestException as e:
         print(f"Stormglass error for ({lat}, {lon}): {e}", file=sys.stderr)

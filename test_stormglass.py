@@ -27,7 +27,7 @@ resp = requests.get(
     params={
         "lat": 32.158,
         "lng": 34.7965,
-        "params": "waveHeight,wavePeriod,windSpeed,windDirection,seaLevel",
+        "params": "waveHeight,wavePeriod,windSpeed,windDirection",
         "start": start.isoformat(),
         "end": end.isoformat(),
     },
@@ -72,6 +72,5 @@ print(f"  waveHeight:  {pick(h.get('waveHeight', {}))} m")
 print(f"  wavePeriod:  {pick(h.get('wavePeriod', {}))} s")
 print(f"  windSpeed:   {pick(h.get('windSpeed', {}))} m/s  ({round((pick(h.get('windSpeed', {})) or 0)*3.6,1)} km/h)")
 print(f"  windDir:     {pick(h.get('windDirection', {}))}°")
-print(f"  seaLevel:    {pick(h.get('seaLevel', {}))} m")
 
 print("\nSUCCESS: Stormglass key is valid and returning data.")
