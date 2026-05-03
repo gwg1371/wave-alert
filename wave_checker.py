@@ -600,9 +600,9 @@ def main() -> None:
     stormglass_key = os.environ.get("STORMGLASS_KEY", "")
 
     file_config = load_config_file()
-    env_min = float(os.environ.get("MIN_WAVE_HEIGHT", "0.8"))
-    min_height = float(file_config.get("min_wave_height", env_min))
-    min_score = float(file_config.get("min_score", os.environ.get("MIN_SCORE", "4.0")))
+    env_min = float(os.environ.get("MIN_WAVE_HEIGHT") or "0.8")
+    min_height = float(file_config.get("min_wave_height") or env_min)
+    min_score = float(file_config.get("min_score") or os.environ.get("MIN_SCORE") or "4.0")
 
     if args.mode == "forecast":
         run_forecast(token, chat_id, min_height, stormglass_key)
