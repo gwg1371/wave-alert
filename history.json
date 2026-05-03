@@ -1,1 +1,28 @@
-[]
+[
+  {
+    "date": "2026-05-03",
+    "day_he": "ראשון",
+    "spots": [
+      {
+        "name": "דרומי",
+        "height": 1.0,
+        "period": 4.55,
+        "wind_label": "און 🔴",
+        "tide_label": null,
+        "score": 2.9,
+        "hour": 17
+      },
+      {
+        "name": "תל ברוך",
+        "height": 1.0,
+        "period": 4.55,
+        "wind_label": "און 🔴",
+        "tide_label": null,
+        "score": 3.0,
+        "hour": 17
+      }
+    ],
+    "best_score": 3.0,
+    "alert_sent": false
+  }
+]
