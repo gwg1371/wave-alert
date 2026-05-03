@@ -130,7 +130,13 @@ def fetch_stormglass(
             "tide_height": None,
         })
 
-    return result or None
+    if not result:
+        print(
+            f"Stormglass returned 0 hours for ({lat}, {lon}). meta={data.get('meta', {})}",
+            file=sys.stderr,
+        )
+        return None
+    return result
 
 
 def fetch_open_meteo(
