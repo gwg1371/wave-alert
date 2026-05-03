@@ -611,7 +611,7 @@ def main() -> None:
     if args.mode == "forecast":
         run_forecast(token, chat_id, min_height, stormglass_key)
     else:
-        check_days_raw = os.environ.get("CHECK_DAYS", "friday,saturday")
+        check_days_raw = os.environ.get("CHECK_DAYS", "thursday,friday,saturday")
         check_days = [d.strip().lower() for d in check_days_raw.split(",")]
         run_today(token, chat_id, min_height, min_score, check_days, stormglass_key, force=args.force)
 
