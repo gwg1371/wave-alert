@@ -58,92 +58,13 @@ def today_name(now: datetime) -> str:
 #    wave_period: float|None, wind_speed_kmh: float|None,
 #    wind_dir: float|None, tide_height: float|None}
 
-def _pick(sources: dict) -> float | None:
-    """Pick best available value from a Stormglass multi-source dict."""
-    for src in ("sg", "noaa", "icon", "meto", "dwd", "fcoo", "fmi", "yr", "smhi"):
-        val = sources.get(src)
-        if val is not None:
-            return float(val)
-    for val in sources.values():
-        if val is not None:
-            return float(val)
-    return None
-
-
-def fetch_stormglass(
-    lat: float, lon: float, start_date: str, end_date: str, key: str
-) -> list[dict] | None:
-    """
-    Single Stormglass call covering wave height+period, wind, and tide.
-    Returns unified hourly list in Israel local time, or None on failure.
-    """
-    start_dt = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=ISRAEL_TZ)
-    end_dt = datetime.strptime(end_date, "%Y-%m-%d").replace(hour=23, minute=59, tzinfo=ISRAEL_TZ)
-
-    params = {
-        "lat": lat,
-        "lng": lon,
-        "params": "waveHeight,wavePeriod,windSpeed,windDirection",
-        "start": start_dt.isoformat(),
-        "end": end_dt.isoformat(),
-    }
-    try:
-        resp = requests.get(
-            "https://api.stormglass.io/v2/weather/point",
-            params=params,
-            headers={"Authorization": key},
-            timeout=20,
-        )
-        if not resp.ok:
-            body = resp.text[:300]
-            print(
-                f"Stormglass HTTP {resp.status_code} for ({lat}, {lon}): {body}",
-                file=sys.stderr,
-            )
-            return None
-        data = resp.json()
-        meta = data.get("meta", {})
-        used = meta.get("requestCount", "?")
-        quota = meta.get("dailyQuota", "?")
-        print(f"Stormglass OK for ({lat}, {lon}): {used}/{quota} requests used today", file=sys.stderr)
-    except requests.RequestException as e:
-        print(f"Stormglass error for ({lat}, {lon}): {e}", file=sys.stderr)
-        return None
-
-    result = []
-    for entry in data.get("hours", []):
-        try:
-            local_dt = datetime.fromisoformat(
-                entry["time"].replace("Z", "+00:00")
-            ).astimezone(ISRAEL_TZ)
-        except (KeyError, ValueError):
-            continue
-
-        wind_ms = _pick(entry.get("windSpeed", {}))
-        result.append({
-            "date": local_dt.strftime("%Y-%m-%d"),
-            "hour": local_dt.hour,
-            "wave_height": _pick(entry.get("waveHeight", {})),
-            "wave_period": _pick(entry.get("wavePeriod", {})),
-            "wind_speed_kmh": round(wind_ms * 3.6, 1) if wind_ms is not None else None,
-            "wind_dir": _pick(entry.get("windDirection", {})),
-            "tide_height": None,
-        })
-
-    if not result:
-        print(
-            f"Stormglass returned 0 hours for ({lat}, {lon}). meta={data.get('meta', {})}",
-            file=sys.stderr,
-        )
-        return None
-    return result
 
 
 def fetch_open_meteo(
     lat: float, lon: float, start_date: str, end_date: str
 ) -> list[dict] | None:
     """
-    Fallback when no Stormglass key. Calls Open-Meteo marine + forecast APIs.
+    Calls Open-Meteo marine + forecast APIs.
     Returns unified hourly list (tide_height is always None).
     """
     marine_params = {
@@ -212,14 +133,8 @@ def fetch_open_meteo(
 
 
 def _fetch_spot_data(
-    spot: dict, start_date: str, end_date: str, stormglass_key: str
+    spot: dict, start_date: str, end_date: str
 ) -> list[dict] | None:
-    """Try Stormglass first; fall back to Open-Meteo if no key or failure."""
-    if stormglass_key:
-        data = fetch_stormglass(spot["lat"], spot["lon"], start_date, end_date, stormglass_key)
-        if data is not None:
-            return data
-        print(f"Stormglass failed for {spot['name']}, falling back to Open-Meteo.", file=sys.stderr)
     return fetch_open_meteo(spot["lat"], spot["lon"], start_date, end_date)
 
 
@@ -477,7 +392,6 @@ def run_today(
     min_height: float,
     min_score: float,
     check_days: list[str],
-    stormglass_key: str = "",
     force: bool = False,
 ) -> None:
     now = get_israel_now()
@@ -494,7 +408,7 @@ def run_today(
 
     results = []
     for spot in SPOTS:
-        hours = _fetch_spot_data(spot, date_str, date_str, stormglass_key)
+        hours = _fetch_spot_data(spot, date_str, date_str)
         if hours is None:
             print(f"Skipping {spot['name']} — all fetches failed.", file=sys.stderr)
             continue
@@ -548,7 +462,7 @@ def run_today(
 
 
 def run_forecast(
-    token: str, chat_id: str, min_height: float, stormglass_key: str = ""
+    token: str, chat_id: str, min_height: float
 ) -> None:
     now = get_israel_now()
     start_date = now.strftime("%Y-%m-%d")
@@ -559,7 +473,7 @@ def run_forecast(
 
     # One call per spot covers all 5 days
     all_hours: dict[str, list[dict] | None] = {
-        spot["name"]: _fetch_spot_data(spot, start_date, end_date, stormglass_key)
+        spot["name"]: _fetch_spot_data(spot, start_date, end_date)
         for spot in SPOTS
     }
 
@@ -617,19 +531,17 @@ def main() -> None:
 
     token = os.environ.get("TELEGRAM_TOKEN", "")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
-    stormglass_key = os.environ.get("STORMGLASS_KEY", "")
-
     file_config = load_config_file()
     env_min = float(os.environ.get("MIN_WAVE_HEIGHT") or "0.8")
     min_height = float(file_config.get("min_wave_height") or env_min)
     min_score = float(file_config.get("min_score") or os.environ.get("MIN_SCORE") or "4.0")
 
     if args.mode == "forecast":
-        run_forecast(token, chat_id, min_height, stormglass_key)
+        run_forecast(token, chat_id, min_height)
     else:
         check_days_raw = os.environ.get("CHECK_DAYS", "thursday,friday,saturday")
         check_days = [d.strip().lower() for d in check_days_raw.split(",")]
-        run_today(token, chat_id, min_height, min_score, check_days, stormglass_key, force=args.force)
+        run_today(token, chat_id, min_height, min_score, check_days, force=args.force)
 
 
 if __name__ == "__main__":
