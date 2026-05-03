@@ -59,7 +59,6 @@ def today_name(now: datetime) -> str:
 #    wind_dir: float|None, tide_height: float|None}
 
 
-
 def fetch_open_meteo(
     lat: float, lon: float, start_date: str, end_date: str
 ) -> list[dict] | None:
@@ -417,9 +416,10 @@ def run_today(
             print(f"No data in surf window for {spot['name']}.", file=sys.stderr)
             continue
         results.append(best)
+        period_str = f"{best['period']}s" if best['period'] is not None else "—"
         print(
             f"{spot['name']}: {best['height']:.1f}m "
-            f"period={best['period']}s wind={best['wind_label']} "
+            f"period={period_str} wind={best['wind_label']} "
             f"tide={best.get('tide_label')} score={best['score']}"
         )
 
