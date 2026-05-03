@@ -5,6 +5,7 @@ Supported commands (from the authorized chat only):
   /setthreshold 1.2  — set minimum wave height alert threshold
   /setscore 5.0      — set minimum composite surf score (1–10)
   /forecast          — send the 5-day surf forecast now
+  /history           — show last 7 days of conditions
   /status            — show current settings
   /help              — show available commands
 """
@@ -16,12 +17,13 @@ import sys
 
 import requests
 
-from wave_checker import run_forecast, load_config_file as load_wave_config
+from wave_checker import run_forecast, load_config_file as load_wave_config, load_history
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 GH_PAT = os.environ.get("GH_PAT", "")
 GH_REPO = os.environ.get("GITHUB_REPOSITORY", "")  # e.g. "gwg1371/wave-alert"
+STORMGLASS_KEY = os.environ.get("STORMGLASS_KEY", "")
 
 CONFIG_FILE = "config.json"
 
@@ -138,6 +140,32 @@ def handle_status(config: dict) -> str:
     )
 
 
+def handle_history() -> str:
+    history = load_history()
+    if not history:
+        return "📜 אין היסטוריה זמינה עדיין."
+
+    recent = history[-7:]
+    lines = ["📜 היסטוריית גלים — 7 ימים אחרונים\n"]
+    for entry in reversed(recent):
+        date_short = entry["date"][5:]
+        day_he = entry["day_he"]
+        alert_icon = "✅" if entry.get("alert_sent") else "➖"
+        spots = entry.get("spots", [])
+        if spots:
+            best = max(spots, key=lambda s: s["score"])
+            period_str = f"{best['period']:.0f}s" if best.get("period") else "—"
+            tide_str = f" | {best['tide_label']}" if best.get("tide_label") else ""
+            lines.append(
+                f"{alert_icon} {day_he} {date_short}  "
+                f"🌊{best['height']:.1f}m ⏱{period_str} 💨{best['wind_label']}{tide_str}  "
+                f"⭐{entry['best_score']:.1f}"
+            )
+        else:
+            lines.append(f"➖ {day_he} {date_short}  אין נתונים")
+    return "\n".join(lines)
+
+
 HELP_TEXT = (
     "🏄 Wave Alert Bot — פקודות זמינות:\n\n"
     "/setthreshold [מטר] — שנה סף גלים מינימלי\n"
@@ -145,6 +173,7 @@ HELP_TEXT = (
     "/setscore [1-10] — שנה ציון מינימום לקבלת התראה\n"
     "  דוגמה: /setscore 5.0\n\n"
     "/forecast — קבל תחזית 5 ימים עכשיו\n\n"
+    "/history — היסטוריית תנאים — 7 ימים אחרונים\n\n"
     "/status — הצג הגדרות נוכחיות\n\n"
     "/help — הצג הודעה זו"
 )
@@ -217,9 +246,12 @@ def main() -> None:
                 wave_config = load_wave_config()
                 env_min = float(os.environ.get("MIN_WAVE_HEIGHT", "0.8"))
                 min_height = float(wave_config.get("min_wave_height", env_min))
-                run_forecast(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, min_height)
+                run_forecast(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, min_height, STORMGLASS_KEY)
             except Exception as e:
                 send_message(f"❌ שגיאה בטעינת תחזית: {e}")
+
+        elif command == "/history":
+            send_message(handle_history())
 
         elif command == "/status":
             send_message(handle_status(config))

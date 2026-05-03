@@ -9,6 +9,9 @@ jobs:
   check-waves:
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: write       # needed to commit history.json updates
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -28,4 +31,13 @@ jobs:
           MIN_WAVE_HEIGHT: ${{ vars.MIN_WAVE_HEIGHT }}
           MIN_SCORE: ${{ vars.MIN_SCORE }}
           CHECK_DAYS: ${{ vars.CHECK_DAYS }}
+          STORMGLASS_KEY: ${{ secrets.STORMGLASS_KEY }}
         run: python wave_checker.py --mode today
+
+      - name: Commit history log
+        run: |
+          git config user.name "Wave Alert Bot"
+          git config user.email "wave-alert-bot@users.noreply.github.com"
+          git add history.json
+          git diff --cached --quiet || git commit -m "bot: update history log [skip ci]"
+          git push
