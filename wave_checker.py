@@ -462,13 +462,16 @@ def run_today(
     min_score: float,
     check_days: list[str],
     stormglass_key: str = "",
+    force: bool = False,
 ) -> None:
     now = get_israel_now()
     today = today_name(now)
 
     if today not in check_days:
-        print(f"Today is {today}, not in check days {check_days}. Exiting.")
-        return
+        if not force:
+            print(f"Today is {today}, not in check days {check_days}. Exiting.")
+            return
+        print(f"Today is {today} (not a surf day) — running anyway due to --force.")
 
     date_str = now.strftime("%Y-%m-%d")
     day_he = DAYS_HE.get(today, today)
@@ -593,6 +596,7 @@ def run_forecast(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["today", "forecast"], default="today")
+    parser.add_argument("--force", action="store_true", help="Skip day-of-week check and always send alert")
     args = parser.parse_args()
 
     token = os.environ.get("TELEGRAM_TOKEN", "")
@@ -609,7 +613,7 @@ def main() -> None:
     else:
         check_days_raw = os.environ.get("CHECK_DAYS", "friday,saturday")
         check_days = [d.strip().lower() for d in check_days_raw.split(",")]
-        run_today(token, chat_id, min_height, min_score, check_days, stormglass_key)
+        run_today(token, chat_id, min_height, min_score, check_days, stormglass_key, force=args.force)
 
 
 if __name__ == "__main__":
