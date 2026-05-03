@@ -12,12 +12,14 @@ SPOTS = [
         "lat": 32.1580,
         "lon": 34.7965,
         "offshore_dir": 100,  # wind from ~east is offshore for this west-facing beach
+        "best_tide": None,    # Mediterranean tidal range is tiny; no strong preference
     },
     {
         "name": "תל ברוך",
         "lat": 32.1220,
         "lon": 34.7900,
         "offshore_dir": 90,
+        "best_tide": None,
     },
 ]
 
@@ -34,6 +36,8 @@ DAYS_HE = {
 SURF_START_HOUR = 6
 SURF_END_HOUR = 18
 FORECAST_DAYS = 5
+HISTORY_FILE = "history.json"
+MAX_HISTORY = 90
 
 
 def get_israel_now() -> datetime:
@@ -84,6 +88,39 @@ def fetch_wind_data(lat: float, lon: float, start_date: str, end_date: str) -> d
         return None
 
 
+def fetch_tide_data(lat: float, lon: float, date_str: str, key: str) -> dict[int, float] | None:
+    """Return {hour: tide_height_m} for the given date, or None on failure."""
+    israel_tz = timezone(timedelta(hours=3))
+    start_unix = int(
+        datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=israel_tz).timestamp()
+    )
+    url = "https://www.worldtides.info/api/v3"
+    params = {
+        "heights": 1,
+        "step": 3600,
+        "lat": lat,
+        "lon": lon,
+        "start": start_unix,
+        "length": 86400,
+        "key": key,
+    }
+    try:
+        resp = requests.get(url, params=params, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("status") != 200:
+            print(f"WorldTides error: {data.get('error')}", file=sys.stderr)
+            return None
+        result: dict[int, float] = {}
+        for entry in data.get("heights", []):
+            hour = datetime.fromtimestamp(entry["dt"], tz=israel_tz).hour
+            result[hour] = entry["height"]
+        return result
+    except requests.RequestException as e:
+        print(f"Tide API error for ({lat}, {lon}): {e}", file=sys.stderr)
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Scoring
 # ---------------------------------------------------------------------------
@@ -127,8 +164,52 @@ def wind_score(wind_speed: float | None, wind_dir: float | None, offshore_dir: f
     return max(0.0, 0.3 - (diff - 90) / 90 * 0.3)  # 0.3 → 0.0
 
 
-def composite_score(h_score: float, p_score: float, w_score: float) -> float:
-    raw = h_score * 0.50 + p_score * 0.28 + w_score * 0.22
+def tide_phase(tide_heights: dict[int, float], hour: int) -> str | None:
+    h = tide_heights.get(hour)
+    h_prev = tide_heights.get(hour - 1)
+    h_next = tide_heights.get(hour + 1)
+    if h is None:
+        return None
+    if h_prev is not None and h_next is not None:
+        if h >= h_prev and h >= h_next:
+            return "high"
+        if h <= h_prev and h <= h_next:
+            return "low"
+    if h_prev is not None:
+        return "rising" if h > h_prev else "falling"
+    if h_next is not None:
+        return "rising" if h_next > h else "falling"
+    return None
+
+
+def tide_score(tide_heights: dict[int, float] | None, hour: int, best_tide: str | None) -> float:
+    if not tide_heights or best_tide is None:
+        return 0.5  # neutral — Mediterranean tides are small
+    phase = tide_phase(tide_heights, hour)
+    if phase is None:
+        return 0.5
+    if phase == best_tide:
+        return 1.0
+    opposites = {"rising": "falling", "falling": "rising", "high": "low", "low": "high"}
+    if opposites.get(best_tide) == phase:
+        return 0.2
+    return 0.5
+
+
+def tide_label(tide_heights: dict[int, float] | None, hour: int) -> str | None:
+    if not tide_heights:
+        return None
+    phase = tide_phase(tide_heights, hour)
+    return {"high": "גאות ▲", "low": "שפל ▼", "rising": "עולה ↑", "falling": "יורד ↓"}.get(phase)
+
+
+def composite_score(
+    h_score: float, p_score: float, w_score: float, t_score: float | None = None
+) -> float:
+    if t_score is not None:
+        raw = h_score * 0.45 + p_score * 0.25 + w_score * 0.20 + t_score * 0.10
+    else:
+        raw = h_score * 0.50 + p_score * 0.28 + w_score * 0.22
     return round(raw * 10, 1)
 
 
@@ -155,6 +236,7 @@ def best_conditions_in_window(
     spot: dict,
     min_height: float,
     date_str: str,
+    tides: dict[int, float] | None = None,
 ) -> dict | None:
     """Return the highest-scoring hour in the surf window for the given date."""
     try:
@@ -195,7 +277,8 @@ def best_conditions_in_window(
         hs = height_score(h, min_height)
         ps = period_score(p)
         wsc = wind_score(ws, wd, spot["offshore_dir"])
-        cs = composite_score(hs, ps, wsc)
+        ts = tide_score(tides, hour, spot.get("best_tide")) if tides is not None else None
+        cs = composite_score(hs, ps, wsc, ts)
 
         if cs > best_score:
             best_score = cs
@@ -207,6 +290,7 @@ def best_conditions_in_window(
                 "wind_speed": ws,
                 "wind_dir": wd,
                 "wind_label": wind_label(ws, wd, spot["offshore_dir"]),
+                "tide_label": tide_label(tides, hour) if tides is not None else None,
                 "score": cs,
                 "height_score": hs,
             }
@@ -226,9 +310,10 @@ def build_today_message(
         good = r["height_score"] > 0 and r["score"] >= min_score
         icon = "📍" if good else "❌"
         period_str = f"{r['period']:.0f}s" if r["period"] is not None else "—"
+        tide_str = f" | 🌊 {r['tide_label']}" if r.get("tide_label") else ""
         lines.append(
             f"{icon} {r['name']}\n"
-            f"   🌊 {r['height']:.1f}m | ⏱ {period_str} | 💨 {r['wind_label']}\n"
+            f"   🌊 {r['height']:.1f}m | ⏱ {period_str} | 💨 {r['wind_label']}{tide_str}\n"
             f"   ⭐ {r['score']:.1f}/10 — שיא בשעה {r['hour']:02d}:00"
         )
     lines.append(f"\n⚡ סף: {min_height:.1f}m | ⭐ {min_score:.1f}/10")
@@ -267,6 +352,28 @@ def send_telegram(token: str, chat_id: str, text: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# History
+# ---------------------------------------------------------------------------
+
+def load_history() -> list:
+    try:
+        with open(HISTORY_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def append_history(entry: dict) -> None:
+    history = load_history()
+    history = [h for h in history if h["date"] != entry["date"]]
+    history.append(entry)
+    history = sorted(history, key=lambda x: x["date"])[-MAX_HISTORY:]
+    with open(HISTORY_FILE, "w") as f:
+        json.dump(history, f, indent=2, ensure_ascii=False)
+    print(f"History updated: {entry['date']}")
+
+
+# ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
@@ -288,6 +395,7 @@ def run_today(
     min_height: float,
     min_score: float,
     check_days: list[str],
+    worldtides_key: str = "",
 ) -> None:
     now = get_israel_now()
     today = today_name(now)
@@ -303,17 +411,19 @@ def run_today(
     for spot in SPOTS:
         marine = fetch_marine_data(spot["lat"], spot["lon"], date_str, date_str)
         wind = fetch_wind_data(spot["lat"], spot["lon"], date_str, date_str)
+        tides = fetch_tide_data(spot["lat"], spot["lon"], date_str, worldtides_key) if worldtides_key else None
         if marine is None:
             print(f"Skipping {spot['name']} — marine fetch failed.", file=sys.stderr)
             continue
-        best = best_conditions_in_window(marine, wind, spot, min_height, date_str)
+        best = best_conditions_in_window(marine, wind, spot, min_height, date_str, tides)
         if best is None:
             print(f"No data in surf window for {spot['name']}.", file=sys.stderr)
             continue
         results.append(best)
         print(
             f"{spot['name']}: {best['height']:.1f}m "
-            f"period={best['period']}s wind={best['wind_label']} score={best['score']}"
+            f"period={best['period']}s wind={best['wind_label']} "
+            f"tide={best.get('tide_label')} score={best['score']}"
         )
 
     if not results:
@@ -321,6 +431,27 @@ def run_today(
         return
 
     any_good = any(r["score"] >= min_score and r["height_score"] > 0 for r in results)
+
+    # Always log the day's conditions regardless of whether an alert was sent
+    append_history({
+        "date": date_str,
+        "day_he": day_he,
+        "spots": [
+            {
+                "name": r["name"],
+                "height": r["height"],
+                "period": r["period"],
+                "wind_label": r["wind_label"],
+                "tide_label": r.get("tide_label"),
+                "score": r["score"],
+                "hour": r["hour"],
+            }
+            for r in results
+        ],
+        "best_score": max(r["score"] for r in results),
+        "alert_sent": any_good,
+    })
+
     if not any_good:
         print(f"No spot meets minimum score {min_score}. No alert sent.")
         return
@@ -334,7 +465,7 @@ def run_today(
     send_telegram(token, chat_id, message)
 
 
-def run_forecast(token: str, chat_id: str, min_height: float) -> None:
+def run_forecast(token: str, chat_id: str, min_height: float, worldtides_key: str = "") -> None:
     now = get_israel_now()
     start_date = now.strftime("%Y-%m-%d")
     end_date = (now + timedelta(days=FORECAST_DAYS - 1)).strftime("%Y-%m-%d")
@@ -364,7 +495,9 @@ def run_forecast(token: str, chat_id: str, min_height: float) -> None:
             wind = all_wind.get(spot["name"])
             if marine is None:
                 continue
-            cond = best_conditions_in_window(marine, wind, spot, min_height, date_str)
+            # Fetch per-day tide data for forecast (one call per spot per day)
+            tides = fetch_tide_data(spot["lat"], spot["lon"], date_str, worldtides_key) if worldtides_key else None
+            cond = best_conditions_in_window(marine, wind, spot, min_height, date_str, tides)
             if cond is None:
                 continue
             if best_for_day is None or cond["score"] > best_for_day["score"]:
@@ -413,6 +546,7 @@ def main() -> None:
 
     token = os.environ.get("TELEGRAM_TOKEN", "")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+    worldtides_key = os.environ.get("WORLDTIDES_KEY", "")
 
     file_config = load_config_file()
     env_min = float(os.environ.get("MIN_WAVE_HEIGHT", "0.8"))
@@ -420,11 +554,11 @@ def main() -> None:
     min_score = float(file_config.get("min_score", os.environ.get("MIN_SCORE", "4.0")))
 
     if args.mode == "forecast":
-        run_forecast(token, chat_id, min_height)
+        run_forecast(token, chat_id, min_height, worldtides_key)
     else:
         check_days_raw = os.environ.get("CHECK_DAYS", "friday,saturday")
         check_days = [d.strip().lower() for d in check_days_raw.split(",")]
-        run_today(token, chat_id, min_height, min_score, check_days)
+        run_today(token, chat_id, min_height, min_score, check_days, worldtides_key)
 
 
 if __name__ == "__main__":
