@@ -12,7 +12,7 @@ Three GitHub Actions workflows run automatically:
 
 | Workflow | Schedule | What it does |
 |---|---|---|
-| **Wave Alert** | 08:00 Israel time daily | Checks today's conditions and sends an alert if threshold is met |
+| **Wave Alert** | 06:00 Israel time daily | Checks today's conditions and sends an alert if threshold is met |
 | **Weekly Forecast** | Sunday 08:00 Israel time | Sends last week's recap then a 5-day forecast |
 | **Bot Command Handler** | Every 10 min, 08:00–01:59 | Polls Telegram for commands and updates settings |
 
@@ -166,7 +166,7 @@ If a variable is not set the script falls back to the defaults above. Settings c
 
 ## Notes
 
-- **DST:** Two cron lines (`0 5` and `0 6`) ensure the alert fires at 08:00 Israel time in both winter (UTC+2) and summer DST (UTC+3).
+- **DST:** Two cron lines (`0 3` and `0 4`) ensure the alert fires at 06:00 Israel time in both winter (UTC+2) and summer DST (UTC+3).
 - **Spots:** Dromi `32.1580°N 34.7965°E` (offshore wind ~100°), Tel Baruch `32.1220°N 34.7900°E` (offshore wind ~90°).
 - **Mediterranean tides** are negligible (~20cm range) so tide scoring is disabled for both spots.
 - **Bot polling** runs every 10 minutes between 08:00–01:59 Israel time only, to save GitHub Actions minutes.
