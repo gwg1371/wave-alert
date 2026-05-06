@@ -2,7 +2,8 @@ name: Wave Alert
 
 on:
   schedule:
-    - cron: "0 6 * * *"   # 06:00 UTC = 08:00 Israel (UTC+2) / 09:00 DST (UTC+3)
+    - cron: "0 6 * * *"   # winter (UTC+2): 08:00 Israel
+    - cron: "0 5 * * *"   # summer DST (UTC+3): 08:00 Israel
   workflow_dispatch:        # allow manual runs for testing
     inputs:
       force:

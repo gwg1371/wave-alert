@@ -2,7 +2,7 @@ name: Bot Command Handler
 
 on:
   schedule:
-    - cron: "*/10 * * * *"   # poll Telegram every 10 minutes
+    - cron: "*/10 5-22 * * *"   # poll Telegram every 10 min, 05:00–22:59 UTC (08:00–01:59 Israel)
   workflow_dispatch:           # allow manual trigger for testing
 
 jobs:
