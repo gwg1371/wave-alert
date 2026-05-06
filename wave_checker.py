@@ -332,9 +332,9 @@ def composite_score(
 # ---------------------------------------------------------------------------
 
 def best_conditions_in_window(
-    hours: list[dict], spot: dict, min_height: float, date_str: str
+    hours: list[dict], spot: dict, min_height: float, date_str: str, min_score: float = 4.0
 ) -> dict | None:
-    """Return the highest-scoring hour in the surf window for the given date."""
+    """Return the highest-scoring hour plus good-conditions window for the given date."""
     surf_hours = [
         h for h in hours
         if h["date"] == date_str
@@ -352,32 +352,55 @@ def best_conditions_in_window(
     }
     has_tide = bool(tide_heights)
 
-    best: dict | None = None
-    best_score = -1.0
-
+    scored: list[tuple] = []
     for h in surf_hours:
         hs = height_score(h["wave_height"], min_height)
         ps = period_score(h["wave_period"])
         wsc = wind_score(h["wind_speed_kmh"], h["wind_dir"], spot["offshore_dir"])
         ts = tide_score(tide_heights, h["hour"], spot.get("best_tide")) if has_tide else None
         cs = composite_score(hs, ps, wsc, ts)
+        scored.append((h, cs, hs))
 
-        if cs > best_score:
-            best_score = cs
-            best = {
-                "name": spot["name"],
-                "hour": h["hour"],
-                "height": h["wave_height"],
-                "period": h["wave_period"],
-                "wind_speed": h["wind_speed_kmh"],
-                "wind_dir": h["wind_dir"],
-                "wind_label": wind_label(h["wind_speed_kmh"], h["wind_dir"], spot["offshore_dir"]),
-                "tide_label": tide_label(tide_heights, h["hour"]) if has_tide else None,
-                "score": cs,
-                "height_score": hs,
-            }
+    if not scored:
+        return None
 
-    return best
+    best_h, best_cs, best_hs = max(scored, key=lambda x: x[1])
+
+    # Find consecutive hours where conditions meet the threshold
+    good_hours = sorted(
+        h["hour"] for h, cs, hs in scored if cs >= min_score and hs > 0
+    )
+    if good_hours:
+        runs: list[list[int]] = []
+        run = [good_hours[0]]
+        for gh in good_hours[1:]:
+            if gh == run[-1] + 1:
+                run.append(gh)
+            else:
+                runs.append(run)
+                run = [gh]
+        runs.append(run)
+
+        peak = best_h["hour"]
+        window = next((r for r in runs if peak in r), max(runs, key=len))
+        window_start, window_end = window[0], window[-1] + 1
+    else:
+        window_start = window_end = best_h["hour"]
+
+    return {
+        "name": spot["name"],
+        "hour": best_h["hour"],
+        "window_start": window_start,
+        "window_end": window_end,
+        "height": best_h["wave_height"],
+        "period": best_h["wave_period"],
+        "wind_speed": best_h["wind_speed_kmh"],
+        "wind_dir": best_h["wind_dir"],
+        "wind_label": wind_label(best_h["wind_speed_kmh"], best_h["wind_dir"], spot["offshore_dir"]),
+        "tide_label": tide_label(tide_heights, best_h["hour"]) if has_tide else None,
+        "score": best_cs,
+        "height_score": best_hs,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -393,11 +416,29 @@ def build_today_message(
         icon = "📍" if good else "❌"
         period_str = f"{r['period']:.0f}s" if r["period"] is not None else "—"
         tide_str = f" | {r['tide_label']}" if r.get("tide_label") else ""
+
+        ws, we = r.get("window_start"), r.get("window_end")
+        if ws is not None and we is not None and we > ws + 1:
+            time_str = f"🕗 {ws:02d}:00–{we:02d}:00 (שיא {r['hour']:02d}:00)"
+        else:
+            time_str = f"🕗 שיא {r['hour']:02d}:00"
+
         lines.append(
             f"{icon} {r['name']}\n"
             f"   🌊 {r['height']:.1f}m | ⏱ {period_str} | 💨 {r['wind_label']}{tide_str}\n"
-            f"   ⭐ {r['score']:.1f}/10 — שיא בשעה {r['hour']:02d}:00"
+            f"   {time_str}  ⭐ {r['score']:.1f}/10"
         )
+
+    # Spot comparison
+    good_results = [r for r in results if r["height_score"] > 0 and r["score"] >= min_score]
+    if len(good_results) >= 2:
+        good_results.sort(key=lambda r: r["score"], reverse=True)
+        diff = good_results[0]["score"] - good_results[1]["score"]
+        if diff >= 0.5:
+            lines.append(f"\n🏆 {good_results[0]['name']} עדיף היום (+{diff:.1f})")
+        else:
+            lines.append(f"\n🤝 שני הספוטים דומים היום")
+
     lines.append(f"\n⚡ סף: {min_height:.1f}m | ⭐ {min_score:.1f}/10")
     lines.append(f"🗓️ יום: {day_he}")
     lines.append("\nצא לגלוש! 🤙")
@@ -418,6 +459,38 @@ def build_forecast_message(forecast: list[dict]) -> str:
         )
 
     lines.append(f"\n🏆 הכי טוב: {best_day['day_he']} — ⭐{best_day['score']:.1f}/10")
+    return "\n".join(lines)
+
+
+def build_recap_message(entries: list[dict]) -> str:
+    if not entries:
+        return "📊 אין נתונים לסיכום שבועי."
+
+    lines = ["📊 סיכום שבוע שעבר\n"]
+    for entry in entries:
+        score = entry.get("best_score", 0.0)
+        star = "🔥" if score >= 7 else ("✅" if score >= 5 else "➖")
+        date_short = entry["date"][5:]
+        day_he = entry.get("day_he", "")
+        spots = entry.get("spots", [])
+        if spots:
+            best_spot = max(spots, key=lambda s: s["score"])
+            period_str = f"{best_spot['period']:.0f}s" if best_spot.get("period") else "—"
+            lines.append(
+                f"{star} {day_he} {date_short}  "
+                f"🌊{best_spot['height']:.1f}m ⏱{period_str} 💨{best_spot['wind_label']}  ⭐{score:.1f}"
+            )
+        else:
+            lines.append(f"➖ {day_he} {date_short}  אין נתונים")
+
+    scores = [e["best_score"] for e in entries if "best_score" in e]
+    avg = sum(scores) / len(scores) if scores else 0.0
+    best = max(entries, key=lambda e: e.get("best_score", 0.0))
+    good_days = sum(1 for e in entries if e.get("alert_sent"))
+
+    lines.append(f"\n📈 ממוצע: ⭐{avg:.1f}/10")
+    lines.append(f"🏆 יום הכי טוב: {best['day_he']} {best['date'][5:]} — ⭐{best.get('best_score', 0.0):.1f}")
+    lines.append(f"🏄 ימים שהיו שווים לגלוש: {good_days}/{len(entries)}")
     return "\n".join(lines)
 
 
@@ -498,7 +571,7 @@ def run_today(
         if hours is None:
             print(f"Skipping {spot['name']} — all fetches failed.", file=sys.stderr)
             continue
-        best = best_conditions_in_window(hours, spot, min_height, date_str)
+        best = best_conditions_in_window(hours, spot, min_height, date_str, min_score)
         if best is None:
             print(f"No data in surf window for {spot['name']}.", file=sys.stderr)
             continue
@@ -605,13 +678,34 @@ def run_forecast(
     send_telegram(token, chat_id, message)
 
 
+def run_recap(token: str, chat_id: str) -> None:
+    now = get_israel_now()
+    week_end = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+    week_start = (now - timedelta(days=7)).strftime("%Y-%m-%d")
+
+    history = load_history()
+    entries = [e for e in history if week_start <= e["date"] <= week_end]
+
+    if not entries:
+        print("No history entries for the past week — skipping recap.")
+        return
+
+    if not token or not chat_id:
+        print("TELEGRAM_TOKEN or TELEGRAM_CHAT_ID not set.", file=sys.stderr)
+        sys.exit(1)
+
+    message = build_recap_message(entries)
+    print("Recap:\n" + message)
+    send_telegram(token, chat_id, message)
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=["today", "forecast"], default="today")
+    parser.add_argument("--mode", choices=["today", "forecast", "recap"], default="today")
     parser.add_argument("--force", action="store_true", help="Skip day-of-week check and always send alert")
     args = parser.parse_args()
 
@@ -626,6 +720,8 @@ def main() -> None:
 
     if args.mode == "forecast":
         run_forecast(token, chat_id, min_height, stormglass_key)
+    elif args.mode == "recap":
+        run_recap(token, chat_id)
     else:
         check_days_raw = os.environ.get("CHECK_DAYS", "thursday,friday,saturday")
         check_days = [d.strip().lower() for d in check_days_raw.split(",")]
