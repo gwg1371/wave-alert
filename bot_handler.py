@@ -82,7 +82,8 @@ def get_updates(offset: int) -> list[dict]:
 
 def send_message(text: str) -> None:
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": text}, timeout=15)
+    resp = requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": text}, timeout=15)
+    resp.raise_for_status()
 
 
 # ---------------------------------------------------------------------------
@@ -208,7 +209,7 @@ def main() -> None:
         update_id: int = update.get("update_id", 0)
         new_last_id = max(new_last_id, update_id)
 
-        message = update.get("message") or update.get("edited_message", {})
+        message = update.get("message")
         if not message:
             continue
 
@@ -265,7 +266,11 @@ def main() -> None:
     # Always update last_update_id so we don't re-process old messages.
     if new_last_id != last_update_id or config_changed:
         config["last_update_id"] = new_last_id
-        push_config(config)
+        try:
+            push_config(config)
+        except Exception as e:
+            print(f"Failed to push config: {e}", file=sys.stderr)
+            sys.exit(1)
 
 
 if __name__ == "__main__":

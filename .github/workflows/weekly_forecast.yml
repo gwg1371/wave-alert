@@ -21,6 +21,12 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
+      - name: Send weekly recap
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python wave_checker.py --mode recap
+
       - name: Send weekly forecast
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
