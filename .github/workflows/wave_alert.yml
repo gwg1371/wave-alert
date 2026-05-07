@@ -2,8 +2,7 @@ name: Wave Alert
 
 on:
   schedule:
-    - cron: "0 4 * * *"   # winter (UTC+2): 06:00 Israel
-    - cron: "0 3 * * *"   # summer DST (UTC+3): 06:00 Israel
+    - cron: "0 3 * * *"   # 03:00 UTC = 06:00 Israel (UTC+3, summer DST)
   workflow_dispatch:        # allow manual runs for testing
     inputs:
       force:
@@ -37,7 +36,6 @@ jobs:
           MIN_WAVE_HEIGHT: ${{ vars.MIN_WAVE_HEIGHT }}
           MIN_SCORE: ${{ vars.MIN_SCORE }}
           CHECK_DAYS: ${{ vars.CHECK_DAYS }}
-          STORMGLASS_KEY: ${{ secrets.STORMGLASS_KEY }}
         run: python wave_checker.py --mode today ${{ github.event_name == 'workflow_dispatch' && inputs.force && '--force' || '' }}
 
       - name: Commit history log

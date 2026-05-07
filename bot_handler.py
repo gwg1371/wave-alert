@@ -23,7 +23,6 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 GH_PAT = os.environ.get("GH_PAT", "")
 GH_REPO = os.environ.get("GITHUB_REPOSITORY", "")  # e.g. "gwg1371/wave-alert"
-STORMGLASS_KEY = os.environ.get("STORMGLASS_KEY", "")
 
 CONFIG_FILE = "config.json"
 
@@ -247,7 +246,7 @@ def main() -> None:
                 wave_config = load_wave_config()
                 env_min = float(os.environ.get("MIN_WAVE_HEIGHT", "0.8"))
                 min_height = float(wave_config.get("min_wave_height", env_min))
-                run_forecast(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, min_height, STORMGLASS_KEY)
+                run_forecast(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, min_height)
             except Exception as e:
                 send_message(f"❌ שגיאה בטעינת תחזית: {e}")
 
