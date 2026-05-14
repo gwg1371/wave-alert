@@ -313,8 +313,45 @@ def best_conditions_in_window(
 # Message builders
 # ---------------------------------------------------------------------------
 
+def generate_motivational_message(results: list[dict], day_he: str, api_key: str) -> str:
+    """Call Claude to generate a personalized, session-unique motivational message."""
+    if not api_key:
+        return "צא לגלוש! 🤙"
+    try:
+        import anthropic
+
+        conditions = "\n".join(
+            f"- {r['name']}: {r['height']:.1f}m, "
+            f"{'%ds period' % r['period'] if r['period'] else 'period unknown'}, "
+            f"{r['wind_label']}, score {r['score']:.1f}/10"
+            for r in results
+        )
+        client = anthropic.Anthropic(api_key=api_key)
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=180,
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        "אתה מאמן גלישה נלהב. כתוב הודעת עידוד קצרה ואישית (2-3 משפטים) "
+                        "בעברית לחבר שלך כדי לגרום לו לצאת לגלוש היום. "
+                        "היה ספציפי לתנאים, השתמש באמוג'ים, ותן לו אנרגיה אמיתית.\n\n"
+                        f"תנאים היום ({day_he}):\n{conditions}\n\n"
+                        "כתוב רק את ההודעה, ללא כותרות."
+                    ),
+                }
+            ],
+        )
+        return resp.content[0].text.strip()
+    except Exception as e:
+        print(f"Motivational message generation failed: {e}", file=sys.stderr)
+        return "צא לגלוש! 🤙"
+
+
 def build_today_message(
-    results: list[dict], min_height: float, min_score: float, day_he: str
+    results: list[dict], min_height: float, min_score: float, day_he: str,
+    motivational_msg: str = "צא לגלוש! 🤙",
 ) -> str:
     lines = ["🏄 התראת גלים!\n"]
     for r in results:
@@ -347,7 +384,7 @@ def build_today_message(
 
     lines.append(f"\n⚡ סף: {min_height:.1f}m | ⭐ {min_score:.1f}/10")
     lines.append(f"🗓️ יום: {day_he}")
-    lines.append("\nצא לגלוש! 🤙")
+    lines.append(f"\n{motivational_msg}")
     return "\n".join(lines)
 
 
@@ -520,7 +557,9 @@ def run_today(
         print("TELEGRAM_TOKEN or TELEGRAM_CHAT_ID not set.", file=sys.stderr)
         sys.exit(1)
 
-    message = build_today_message(results, min_height, min_score, day_he)
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    motivational = generate_motivational_message(results, day_he, anthropic_key)
+    message = build_today_message(results, min_height, min_score, day_he, motivational)
     print("Message:\n" + message)
     send_telegram(token, chat_id, message)
 
