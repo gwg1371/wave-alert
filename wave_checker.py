@@ -313,40 +313,49 @@ def best_conditions_in_window(
 # Message builders
 # ---------------------------------------------------------------------------
 
-def generate_motivational_message(results: list[dict], day_he: str, api_key: str) -> str:
-    """Call Claude to generate a personalized, session-unique motivational message."""
-    if not api_key:
-        return "צא לגלוש! 🤙"
-    try:
-        import anthropic
+_MSG_BANK: dict[str, list[str]] = {
+    "fire": [  # score >= 7
+        "⭐ {score}/10 — הים בוער היום! תזרוק הכל ותצא עכשיו, גלים כאלה לא מחכים! 🔥🌊",
+        "⭐ {score}/10 — ימים כאלה בשבילם התחלת לגלוש! אל תפספס! 🏄‍♂️🤙",
+        "⭐ {score}/10 — וואו! כשהניקוד כזה אתה לא שואל שאלות, לוקח את הגלישה ויוצא! 💪🌊",
+        "⭐ {score}/10 — הסשן שתספר עליו לחברים. תצא עכשיו ותחטוף את הגלים! 🔥🏄",
+        "⭐ {score}/10 — כל גל שם שווה עשרה שיושבים בבית. יאללה החוצה! 🌊🤙",
+    ],
+    "good": [  # score >= 5
+        "⭐ {score}/10 — תנאים טובים! שמן את הגלישה ותצא, לא תצטער! 🌊🤙",
+        "⭐ {score}/10 — הים מזמין אותך. עדיף סשן סביר בים מאשר לחשוב עליו מהספה! 🏄",
+        "⭐ {score}/10 — לא מושלם, אבל ממש טוב. הגלים שם מחכים לך! 🌊",
+        "⭐ {score}/10 — יום גלישה! תתלבש, תצא, ותהנה! 🏄‍♂️🤙",
+        "⭐ {score}/10 — גלים טובים ורוח נוחה. מה עוד צריך? 🌊🔥",
+    ],
+    "decent": [  # score >= 3
+        "⭐ {score}/10 — לא מושלם, אבל מספיק טוב בשביל לנשום אוויר ים ולתפוס גל! 🌊",
+        "⭐ {score}/10 — הגלים לא ענקיים, אבל גל קטן זה עדיין גל. שווה לצאת! 🤙",
+        "⭐ {score}/10 — תנאים סבירים. לפעמים הסשנים האלה מפתיעים בגדול! 🏄",
+        "⭐ {score}/10 — ים רגוע יותר? שלמדת פאדלינג טוב. יאללה החוצה! 🌊🤙",
+        "⭐ {score}/10 — לא כוכב, אבל מי שאוהב ים תמיד מוצא משהו! 🌊",
+    ],
+    "weak": [  # score < 3
+        "⭐ {score}/10 — הים לא במיטבו, אבל כל גל עדיף על אפס גלים. יאללה! 🌊",
+        "⭐ {score}/10 — שקט בים? פרפקט לטכניקה ולתרגול. תצא! 🏄",
+        "⭐ {score}/10 — יום רגוע בים זה יום לנקות את הראש. תצא להתרענן! 🤙",
+        "⭐ {score}/10 — לא הכי חזק, אבל אוויר ים תמיד עושה טוב! 🌊",
+    ],
+}
 
-        conditions = "\n".join(
-            f"- {r['name']}: {r['height']:.1f}m, "
-            f"{'%ds period' % r['period'] if r['period'] else 'period unknown'}, "
-            f"{r['wind_label']}, score {r['score']:.1f}/10"
-            for r in results
-        )
-        client = anthropic.Anthropic(api_key=api_key)
-        resp = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=180,
-            messages=[
-                {
-                    "role": "user",
-                    "content": (
-                        "אתה מאמן גלישה נלהב. כתוב הודעת עידוד קצרה ואישית (2-3 משפטים) "
-                        "בעברית לחבר שלך כדי לגרום לו לצאת לגלוש היום. "
-                        "היה ספציפי לתנאים, השתמש באמוג'ים, ותן לו אנרגיה אמיתית.\n\n"
-                        f"תנאים היום ({day_he}):\n{conditions}\n\n"
-                        "כתוב רק את ההודעה, ללא כותרות."
-                    ),
-                }
-            ],
-        )
-        return resp.content[0].text.strip()
-    except Exception as e:
-        print(f"Motivational message generation failed: {e}", file=sys.stderr)
-        return "צא לגלוש! 🤙"
+
+def pick_motivational_message(score: float, date_str: str) -> str:
+    import hashlib
+    if score >= 7:
+        bank = _MSG_BANK["fire"]
+    elif score >= 5:
+        bank = _MSG_BANK["good"]
+    elif score >= 3:
+        bank = _MSG_BANK["decent"]
+    else:
+        bank = _MSG_BANK["weak"]
+    idx = int(hashlib.md5(date_str.encode()).hexdigest(), 16) % len(bank)
+    return bank[idx].format(score=f"{score:.1f}")
 
 
 def build_today_message(
@@ -557,8 +566,8 @@ def run_today(
         print("TELEGRAM_TOKEN or TELEGRAM_CHAT_ID not set.", file=sys.stderr)
         sys.exit(1)
 
-    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    motivational = generate_motivational_message(results, day_he, anthropic_key)
+    best_score = max(r["score"] for r in results)
+    motivational = pick_motivational_message(best_score, date_str)
     message = build_today_message(results, min_height, min_score, day_he, motivational)
     print("Message:\n" + message)
     send_telegram(token, chat_id, message)
