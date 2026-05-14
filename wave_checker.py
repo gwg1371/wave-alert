@@ -491,7 +491,7 @@ def run_today(
         print("No wave data retrieved. Exiting.")
         return
 
-    any_good = any(r["score"] >= min_score and r["height_score"] > 0 for r in results)
+    any_good = any(r["score"] >= min_score and (min_score == 0 or r["height_score"] > 0) for r in results)
 
     append_history({
         "date": date_str,
