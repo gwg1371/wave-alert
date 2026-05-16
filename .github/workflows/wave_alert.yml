@@ -2,7 +2,7 @@ name: Wave Alert
 
 on:
   schedule:
-    - cron: "0 3 * * 4,5,6"   # 03:00 UTC = 06:00 Israel (UTC+3, summer DST) — Thu/Fri/Sat only
+    - cron: "0 1 * * 4,5,6"   # 01:00 UTC = 04:00 Israel — early to absorb GitHub Actions queue delays (typically 1-3h on weekends)
   workflow_dispatch:        # allow manual runs for testing
     inputs:
       force:

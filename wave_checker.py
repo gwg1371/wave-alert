@@ -391,7 +391,8 @@ def build_today_message(
         else:
             lines.append(f"\n🤝 שני הספוטים דומים היום")
 
-    lines.append(f"\n⚡ סף: {min_height:.1f}m | ⭐ {min_score:.1f}/10")
+    score_thresh = f" | ⭐ {min_score:.1f}/10" if min_score > 0 else ""
+    lines.append(f"\n⚡ סף: {min_height:.1f}m{score_thresh}")
     lines.append(f"🗓️ יום: {day_he}")
     lines.append(f"\n{motivational_msg}")
     return "\n".join(lines)
@@ -668,7 +669,10 @@ def main() -> None:
     file_config = load_config_file()
     env_min = float(os.environ.get("MIN_WAVE_HEIGHT") or "0.8")
     min_height = float(file_config.get("min_wave_height") or env_min)
-    min_score = float(file_config.get("min_score") or os.environ.get("MIN_SCORE") or "4.0")
+    min_score = float(
+        file_config["min_score"] if "min_score" in file_config
+        else os.environ.get("MIN_SCORE", "4.0")
+    )
 
     if args.mode == "forecast":
         run_forecast(token, chat_id, min_height)
