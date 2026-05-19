@@ -504,6 +504,7 @@ def run_today(
     min_score: float,
     check_days: list[str],
     force: bool = False,
+    dry_run: bool = False,
 ) -> None:
     now = get_israel_now()
     today = today_name(now)
@@ -563,14 +564,20 @@ def run_today(
         print(f"No spot meets minimum score {min_score}. No alert sent.")
         return
 
-    if not token or not chat_id:
-        print("TELEGRAM_TOKEN or TELEGRAM_CHAT_ID not set.", file=sys.stderr)
-        sys.exit(1)
-
     best_score = max(r["score"] for r in results)
     motivational = pick_motivational_message(best_score, date_str)
     message = build_today_message(results, min_height, min_score, day_he, motivational)
     print("Message:\n" + message)
+
+    if dry_run:
+        print("\nDRY RUN — message would be sent:")
+        print(message)
+        return
+
+    if not token or not chat_id:
+        print("TELEGRAM_TOKEN or TELEGRAM_CHAT_ID not set.", file=sys.stderr)
+        sys.exit(1)
+
     send_telegram(token, chat_id, message)
 
 
@@ -661,6 +668,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["today", "forecast", "recap"], default="today")
     parser.add_argument("--force", action="store_true", help="Skip day-of-week check and always send alert")
+    parser.add_argument("--dry-run", action="store_true", help="Print message without sending to Telegram")
     args = parser.parse_args()
 
     token = os.environ.get("TELEGRAM_TOKEN", "")
@@ -681,7 +689,7 @@ def main() -> None:
     else:
         check_days_raw = os.environ.get("CHECK_DAYS", "thursday,friday,saturday")
         check_days = [d.strip().lower() for d in check_days_raw.split(",")]
-        run_today(token, chat_id, min_height, min_score, check_days, force=args.force)
+        run_today(token, chat_id, min_height, min_score, check_days, force=args.force, dry_run=args.dry_run)
 
 
 if __name__ == "__main__":
