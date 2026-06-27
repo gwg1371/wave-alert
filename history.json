@@ -622,5 +622,31 @@
     ],
     "best_score": 3.8,
     "alert_sent": true
+  },
+  {
+    "date": "2026-06-27",
+    "day_he": "שבת",
+    "spots": [
+      {
+        "name": "דרומי",
+        "height": 0.8,
+        "period": 5.75,
+        "wind_label": "גלאסי 🪟",
+        "tide_label": null,
+        "score": 3.8,
+        "hour": 6
+      },
+      {
+        "name": "תל ברוך",
+        "height": 0.8,
+        "period": 5.75,
+        "wind_label": "גלאסי 🪟",
+        "tide_label": null,
+        "score": 3.8,
+        "hour": 6
+      }
+    ],
+    "best_score": 3.8,
+    "alert_sent": true
   }
 ]
